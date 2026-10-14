@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>評価ツール</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:"Noto Sans JP","Yu Gothic","Meiryo",sans-serif;background:#f4f5f7;color:#222}
+.container{max-width:1100px;margin:30px auto;padding:0 20px 50px}
+h1{margin-bottom:5px}.subtitle{color:#666;margin-top:0}
+.card{background:#fff;border-radius:14px;padding:24px;margin-top:20px;box-shadow:0 3px 15px rgba(0,0,0,.07)}
+.top-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+label{display:block;font-weight:bold;margin-bottom:7px}
+input,select,textarea{width:100%;padding:11px;border:1px solid #ccc;border-radius:8px;font-size:15px;font-family:inherit}
+textarea{min-height:90px;resize:vertical}
+.evaluation{border:1px solid #ddd;border-radius:12px;padding:18px;margin-top:15px}
+.evaluation-header{display:flex;justify-content:space-between;align-items:center;gap:15px;margin-bottom:12px}
+.evaluation-name{font-size:18px;font-weight:bold}.multiplier{font-size:14px;color:#666}
+.score-row{display:grid;grid-template-columns:160px 150px 1fr;gap:15px;align-items:center}
+.result{font-weight:bold;font-size:18px}.result span{color:#555}
+.summary{display:grid;grid-template-columns:1fr 1fr;gap:15px;margin-top:20px}
+.summary-box{padding:20px;border-radius:12px;text-align:center;background:#f0f2f5}
+.summary-title{color:#666;font-size:14px}.summary-value{font-size:30px;font-weight:bold;margin-top:5px}
+.buttons{display:flex;flex-wrap:wrap;gap:10px;margin-top:20px}
+button{border:none;border-radius:9px;padding:12px 18px;font-size:15px;font-weight:bold;cursor:pointer}
+.primary{background:#222;color:#fff}.secondary{background:#e8eaed;color:#222}.danger{background:#f1dada;color:#a33}
+button:hover{opacity:.85}
+.output{white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:18px;border-radius:10px;line-height:1.7;margin-top:15px;min-height:250px}
+.history-search{margin-bottom:15px}
+.person{border:1px solid #ddd;border-radius:12px;padding:16px;margin-bottom:12px}
+.person-header{display:flex;justify-content:space-between;align-items:center;gap:15px}
+.person-name{font-weight:bold;font-size:18px}.person-meta{color:#777;font-size:13px;margin-top:4px}
+.revision{border-top:1px solid #eee;margin-top:12px;padding-top:12px}
+.revision-head{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.revision-title{font-weight:bold}.revision-actions{display:flex;gap:7px;flex-wrap:wrap}
+.revision-actions button{padding:7px 10px;font-size:12px}
+.small-note{color:#777;font-size:13px;line-height:1.6}
+.legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:15px}
+.legend span{background:#f0f0f0;border-radius:20px;padding:6px 12px;font-size:13px}
+details summary{cursor:pointer;color:#555;font-size:13px;margin-top:8px}
+@media(max-width:700px){.top-grid,.summary{grid-template-columns:1fr}.score-row{grid-template-columns:1fr}.evaluation-header,.person-header,.revision-head{align-items:flex-start;flex-direction:column}}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>評価ツール</h1>
+<p class="subtitle">声・トーク力・浮上率の3項目を評価します。</p>
+
+<div class="card">
+<div class="top-grid">
+<div><label for="name">名前</label><input id="name" type="text" placeholder="評価対象者の名前"></div>
+<div><label for="date">評価日</label><input id="date" type="date"></div>
+</div>
+
+
+
+<div id="evaluations"></div>
+
+<div class="summary">
+<div class="summary-box" style="grid-column:1 / -1"><div class="summary-title">合計点</div><div class="summary-value" id="total">0.00</div></div>
+</div>
+
+<div class="buttons">
+<button class="primary" onclick="saveEvaluation()">評価を保存</button>
+<button class="secondary" onclick="generateOutput()">提出用テキストを生成</button>
+<button class="secondary" onclick="copyOutput()">提出用テキストをコピー</button>
+<button class="secondary" onclick="clearForm()">入力をクリア</button>
+</div>
+<p class="small-note">同じ名前で再度保存すると、最新評価に更新しつつ、前回の評価を「履歴」として残します。</p>
+</div>
+
+<div class="card">
+<h2>提出用テキスト</h2>
+<p class="small-note">入力内容から、以前使っていた形式で自動生成します。</p>
+<div id="output" class="output">まだ生成されていません。</div>
+</div>
+
+<div class="card">
+<h2>評価履歴</h2>
+<input id="historySearch" class="history-search" type="text" placeholder="名前で検索..." oninput="renderHistory()">
+<div id="history"></div>
+<div class="buttons">
+<button class="secondary" onclick="exportCSV()">CSV出力</button>
+<button class="danger" onclick="deleteAllHistory()">全履歴削除</button>
+</div>
+</div>
+</div>
+
+<script>
+const STORAGE_KEY="evaluationToolDataV2";
+const evaluations=[
+ {key:"voice",name:"声"},
+ {key:"talk",name:"トーク力"},
+ {key:"activity",name:"浮上率"}
+];
+let editingPersonId=null;
+
+document.addEventListener("DOMContentLoaded",()=>{
+ const today=new Date();
+ document.getElementById("date").value=today.toISOString().split("T")[0];
+ createEvaluationInputs();
+ calculate();
+ renderHistory();
+});
+
+function createEvaluationInputs(){
+ const container=document.getElementById("evaluations");
+ container.innerHTML="";
+ evaluations.forEach(item=>{
+  const wrapper=document.createElement("div");
+  wrapper.className="evaluation";
+  wrapper.innerHTML=`
+   <div class="evaluation-header">
+    <div class="evaluation-name">【${item.name}】</div>
+   </div>
+   <div class="score-row">
+    <div>
+     <label>点数</label>
+     <select id="score-${item.key}" onchange="calculate()">${createScoreOptions()}</select>
+    </div>
+    <div class="result">点数：<span id="result-${item.key}">1.0</span></div>
+    <div>
+     <label>補足</label>
+     <textarea id="note-${item.key}" placeholder="${item.name}についての補足..."></textarea>
+    </div>
+   </div>`;
+  container.appendChild(wrapper);
+ });
+}
+
+function createScoreOptions(){
+ let html="";
+ for(let i=1;i<=5;i+=.5) html+=`<option value="${i}">${i}</option>`;
+ return html;
+}
+
+function calculate(){
+ let total=0;
+ evaluations.forEach(item=>{
+  const score=parseFloat(document.getElementById(`score-${item.key}`).value);
+  total+=score;
+  document.getElementById(`result-${item.key}`).textContent=score.toFixed(1);
+ });
+ document.getElementById("total").textContent=total.toFixed(1);
+}
+
+function getFormData(){
+ const data={
+  date:document.getElementById("date").value,
+  scores:{},notes:{},
+  total:parseFloat(document.getElementById("total").textContent)
+ };
+ evaluations.forEach(item=>{
+  data.scores[item.key]=parseFloat(document.getElementById(`score-${item.key}`).value);
+  data.notes[item.key]=document.getElementById(`note-${item.key}`).value;
+ });
+ return data;
+}
+
+function getPeople(){
+ const people=JSON.parse(localStorage.getItem(STORAGE_KEY))||[];
+ return people.map(p=>{
+  // Keep existing 3-item records intact. If an older record has no total,
+  // calculate a compatible total from the three fields.
+  if(p.current){
+   p.current.scores=p.current.scores||{};
+   p.current.notes=p.current.notes||{};
+   p.current.total=Number.isFinite(Number(p.current.total))
+     ? Number(p.current.total)
+     : ["voice","talk","activity"].reduce((sum,k)=>sum+(Number(p.current.scores[k])||0),0);
+  }
+  p.history=(p.history||[]).map(h=>{
+   h.scores=h.scores||{};
+   h.notes=h.notes||{};
+   h.total=Number.isFinite(Number(h.total))
+     ? Number(h.total)
+     : ["voice","talk","activity"].reduce((sum,k)=>sum+(Number(h.scores[k])||0),0);
+   return h;
+  });
+  return p;
+ });
+}
+
+function saveEvaluation(){
+ const name=document.getElementById("name").value.trim();
+ if(!name){alert("名前を入力してください。");return;}
+ const data=getFormData();
+ let people=getPeople();
+ let person;
+
+ if(editingPersonId){
+  person=people.find(p=>p.id===editingPersonId);
+ } else {
+  person=people.find(p=>p.name.trim().toLowerCase()===name.toLowerCase());
+ }
+
+ if(person){
+  if(person.name!==name) person.name=name;
+  if(!person.history) person.history=[];
+  if(person.current){
+   person.history.unshift({...person.current, savedAt:new Date().toISOString()});
+  }
+  person.current=data;
+  person.updatedAt=new Date().toISOString();
+ }else{
+  person={
+   id:Date.now(),
+   name,
+   current:data,
+   history:[],
+   createdAt:new Date().toISOString(),
+   updatedAt:new Date().toISOString()
+  };
+  people.unshift(person);
+  editingPersonId=person.id;
+ }
+
+ localStorage.setItem(STORAGE_KEY,JSON.stringify(people));
+ renderHistory();
+ generateOutput();
+ alert(person.history.length?"評価を更新しました。前回データは履歴に残っています。":"評価を保存しました。");
+}
+
+function generateOutputFromData(data){
+ let text="総評：\n";
+ evaluations.forEach(item=>text+=`【${item.name}】${formatScore(data.scores[item.key])}\n`);
+ text+="\n補足\n";
+ evaluations.forEach(item=>{
+  text+=`<${item.name}>\n`;
+  const note=data.notes[item.key]||"";
+  if(note.trim()) text+=note.trim()+"\n";
+  text+="\n";
+ });
+ return text.trim();
+}
+
+function generateOutput(){
+ const data=getFormData();
+ document.getElementById("output").textContent=generateOutputFromData(data);
+}
+
+function formatScore(score){return Number.isInteger(score)?String(score):Number(score).toFixed(1);}
+
+async function copyOutput(){
+ if(document.getElementById("output").textContent==="まだ生成されていません。") generateOutput();
+ try{
+  await navigator.clipboard.writeText(document.getElementById("output").textContent);
+  alert("提出用テキストをコピーしました。");
+ }catch(e){alert("コピーできませんでした。テキストを選択してコピーしてください。");}
+}
+
+function clearForm(){
+ if(!confirm("現在の入力内容をクリアしますか？"))return;
+ editingPersonId=null;
+ document.getElementById("name").value="";
+ document.getElementById("date").value=new Date().toISOString().split("T")[0];
+ evaluations.forEach(item=>{
+  document.getElementById(`score-${item.key}`).value="1";
+  document.getElementById(`note-${item.key}`).value="";
+ });
+ document.getElementById("output").textContent="まだ生成されていません。";
+ calculate();
+}
+
+function loadPerson(id){
+ const people=getPeople(),person=people.find(p=>p.id===id);
+ if(!person)return;
+ editingPersonId=person.id;
+ document.getElementById("name").value=person.name;
+ loadDataToForm(person.current);
+ generateOutput();
+ window.scrollTo({top:0,behavior:"smooth"});
+}
+
+function loadRevision(personId,index){
+ const people=getPeople(),person=people.find(p=>p.id===personId);
+ if(!person||!person.history[index])return;
+ editingPersonId=person.id;
+ document.getElementById("name").value=person.name;
+ loadDataToForm(person.history[index]);
+ generateOutput();
+ window.scrollTo({top:0,behavior:"smooth"});
+}
+
+function loadDataToForm(data){
+ document.getElementById("date").value=data.date||"";
+ evaluations.forEach(item=>{
+  const score = Number(data.scores[item.key]);
+  document.getElementById(`score-${item.key}`).value =
+    (score >= 1 && score <= 5 && ((score * 2) % 1 === 0)) ? String(score) : "1";
+  document.getElementById(`note-${item.key}`).value=data.notes[item.key]||"";
+ });
+ calculate();
+}
+
+function renderHistory(){
+ const container=document.getElementById("history");
+ const search=document.getElementById("historySearch").value.trim().toLowerCase();
+ let people=getPeople().filter(p=>!search||p.name.toLowerCase().includes(search));
+ if(!people.length){container.innerHTML='<p class="small-note">評価履歴はありません。</p>';return;}
+ container.innerHTML="";
+ people.forEach(person=>{
+  const div=document.createElement("div");
+  div.className="person";
+  const c=person.current;
+  let revisions="";
+  (person.history||[]).forEach((h,i)=>{
+   revisions+=`
+    <div class="revision">
+     <div class="revision-head">
+      <div>
+       <div class="revision-title">過去 ${person.history.length-i} 回目</div>
+       <div class="person-meta">評価日：${escapeHTML(h.date||"-")} ／ 合計：${Number(h.total).toFixed(1)}点</div>
+      </div>
+      <div class="revision-actions">
+       <button class="secondary" onclick="loadRevision(${person.id},${i})">この評価を開く</button>
+       <button class="secondary" onclick="generateRevisionOutput(${person.id},${i})">提出文</button>
+      </div>
+     </div>
+    </div>`;
+  });
+  div.innerHTML=`
+   <div class="person-header">
+    <div>
+     <div class="person-name">${escapeHTML(person.name)}</div>
+     <div class="person-meta">最新評価：${escapeHTML(c.date||"-")} ／ 合計：<strong>${Number(c.total).toFixed(1)}</strong>点</div>
+    </div>
+    <div class="revision-actions">
+     <button class="primary" onclick="loadPerson(${person.id})">最新を開く</button>
+     <button class="secondary" onclick="generatePersonOutput(${person.id})">提出文</button>
+     <button class="danger" onclick="deletePerson(${person.id})">削除</button>
+    </div>
+   </div>
+   ${revisions?`<details><summary>過去の評価履歴（${person.history.length}件）</summary>${revisions}</details>`:""}
+  `;
+  container.appendChild(div);
+ });
+}
+
+function generatePersonOutput(id){
+ const p=getPeople().find(x=>x.id===id);
+ if(!p)return;
+ document.getElementById("output").textContent=generateOutputFromData(p.current);
+ window.scrollTo({top:document.getElementById("output").getBoundingClientRect().top+window.scrollY-100,behavior:"smooth"});
+}
+
+function generateRevisionOutput(id,index){
+ const p=getPeople().find(x=>x.id===id);
+ if(!p||!p.history[index])return;
+ document.getElementById("output").textContent=generateOutputFromData(p.history[index]);
+ window.scrollTo({top:document.getElementById("output").getBoundingClientRect().top+window.scrollY-100,behavior:"smooth"});
+}
+
+function deletePerson(id){
+ if(!confirm("この人の最新評価と過去の評価履歴をすべて削除しますか？"))return;
+ let people=getPeople().filter(p=>p.id!==id);
+ localStorage.setItem(STORAGE_KEY,JSON.stringify(people));
+ if(editingPersonId===id)editingPersonId=null;
+ renderHistory();
+}
+
+function deleteAllHistory(){
+ if(!getPeople().length){alert("削除する履歴がありません。");return;}
+ if(!confirm("すべての人の評価履歴を削除しますか？この操作は元に戻せません。"))return;
+ localStorage.removeItem(STORAGE_KEY);
+ editingPersonId=null;
+ renderHistory();
+}
+
+function exportCSV(){
+ const people=getPeople();
+ if(!people.length){alert("出力する評価履歴がありません。");return;}
+ const headers=["名前","状態","評価日","声","声_補足","トーク力","トーク力_補足","浮上率","浮上率_補足","合計点"];
+ const rows=[headers];
+ people.forEach(p=>{
+  const add=(status,d)=>{
+   rows.push([p.name,status,d.date,d.scores.voice,d.notes.voice,d.scores.talk,d.notes.talk,d.scores.activity,d.notes.activity,d.total]);
+  };
+  add("最新",p.current);
+  (p.history||[]).forEach(h=>add("過去",h));
+ });
+ const csv=rows.map(row=>row.map(v=>`"${String(v??"").replace(/"/g,'""')}"`).join(",")).join("\n");
+ const blob=new Blob(["\\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});
+ const url=URL.createObjectURL(blob),a=document.createElement("a");
+ a.href=url;a.download=`評価履歴_${new Date().toISOString().slice(0,10)}.csv`;a.click();URL.revokeObjectURL(url);
+}
+
+function escapeHTML(str){return String(str).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;");}
+</script>
+</body>
+</html>
